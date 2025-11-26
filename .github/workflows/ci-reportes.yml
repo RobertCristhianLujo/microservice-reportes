@@ -1,0 +1,81 @@
+name: CI - microservicio-reportes
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-test-scan-and-push:
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Descarga el código del repositorio
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 2) Configura Java 17 (Spring Boot 3 usa 17 en tu pom)
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # 3) Cache de dependencias Maven
+      - name: Cache Maven packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-
+
+      # 4) Compila y corre tests
+      - name: Build and test with Maven
+        run: mvn -B clean verify
+
+      # 5) Scanner 1 - Hadolint sobre el Dockerfile
+      - name: Lint Dockerfile with Hadolint
+        run: docker run --rm -i hadolint/hadolint < Dockerfile
+
+      # 6) Scanner 2 - Trivy sobre el filesystem del proyecto
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+
+      # 7) Construir imagen Docker localmente (usa tu Dockerfile)
+      - name: Build Docker image
+        run: docker build -t microservicio-reportes:${{ github.sha }} .
+
+      # 8) Scanner 3 - Trivy sobre la imagen Docker
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: 'image'
+          image-ref: 'microservicio-reportes:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          severity: 'HIGH,CRITICAL'
+
+      # 9) Login a Docker Hub
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # 10) Tag y push de la imagen a Docker Hub
+      - name: Push image to Docker Hub
+        run: |
+          docker tag microservicio-reportes:${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/microservicio-reportes:latest
+          docker tag microservicio-reportes:${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/microservicio-reportes:${{ github.sha }}
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/microservicio-reportes:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/microservicio-reportes:${{ github.sha }}
+
